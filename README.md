@@ -57,6 +57,8 @@ make grade
 
 - xv6 教材仓库：[https://github.com/mit-pdos/xv6-riscv-book](https://github.com/mit-pdos/xv6-riscv-book)
 
+- xv6 中文教材: [https://obsidian-10.gitbook.io/xv6-book-zh](https://obsidian-10.gitbook.io/xv6-book-zh)
+
 ## 致谢
 
 感谢 [MIT 6.1810](https://pdos.csail.mit.edu/6.828/2025/schedule.html) 提供的课程资源。
