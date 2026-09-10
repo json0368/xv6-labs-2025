@@ -3,6 +3,7 @@
 #include "user/user.h"
 #include "kernel/fs.h"
 #include "kernel/fcntl.h"
+#include "kernel/param.h"
 
 int main(int argc, char *argv[]) {
     char buf[512], *p;
@@ -12,6 +13,11 @@ int main(int argc, char *argv[]) {
 
     if (argc < 3) {
         fprintf(2, "Usage: find [path] [filename]\n");
+        exit(1);
+    }
+
+    if (argc > MAXARG) {
+        fprintf(2, "find: too many arguments\n");
         exit(1);
     }
 
@@ -34,7 +40,42 @@ int main(int argc, char *argv[]) {
             memmove(buf, p, strlen(p));
             buf[strlen(p)] = '\0';
             if (strcmp(buf, argv[2]) == 0) {
-                printf("%s\n", argv[1]);
+                if (argc > 3) {
+                    // -exec
+                    if (strcmp(argv[3], "-exec") == 0 && argc > 4) {
+                        int pid = fork();
+                        if (pid == -1) {
+                            fprintf(2, "find: fork failed\n");
+                            exit(1);
+                        } else if (pid == 0) {
+                            // 子进程
+                            char *exec_argv[MAXARG];
+                            for (int i = 4; i <= argc + 1; i++) {
+                                if (i == argc + 1) {
+                                    exec_argv[i - 4] = 0;
+                                } else if (i == argc) {
+                                    exec_argv[i - 4] = argv[1];
+                                } else {
+                                    exec_argv[i - 4] = argv[i];
+                                }
+                            }
+                            exec(argv[4], exec_argv);
+                            fprintf(2, "exec %s failed\n", argv[0]);
+                            exit(1);
+                        } else {
+                            // 父进程
+                            wait(0);
+                        }
+                    } else if (strcmp(argv[3], "-exec") == 0 && argc <= 4) {
+                        fprintf(2, "find: missing command after -exec\n");
+                        exit(1);
+                    } else {
+                        fprintf(2, "find: invalid option %s\n", argv[3]);
+                        exit(1);
+                    }
+                } else {
+                    printf("%s\n", argv[1]);
+                }
             }
             close(fd);
             break;
@@ -64,8 +105,12 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
-                char *new_argv[] = {argv[0], buf, argv[2]};
-                main(3, new_argv);
+                char *new_argv[MAXARG];
+                for (int i = 0; i < argc; i++) {
+                    if (i == 1) new_argv[i] = buf;
+                    else new_argv[i] = argv[i];
+                }
+                main(argc, new_argv);
             }
             close(fd);
             break;
