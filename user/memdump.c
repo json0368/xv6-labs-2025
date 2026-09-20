@@ -72,6 +72,10 @@ void memdump(char *fmt, char *data) {
                 break;
             } 
             case 'p': {
+                // 使用 %lx 打印会将 64 位整数截断为 32 位，
+                // 原因是用户态的 printf 会调用 prinfint，
+                // 而 prinfint 使用 uint 来接收参数，
+                // 这会导致 64 位整数被截断为 32 位。
                 printf("%lx\n", *(unsigned long*)data);
                 data += 8;
                 break;

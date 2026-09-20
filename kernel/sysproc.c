@@ -105,3 +105,9 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_consmode(void) {
+  int raw;
+  argint(0, &raw);
+  return consmode(raw);
+}

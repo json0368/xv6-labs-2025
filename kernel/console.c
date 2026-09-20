@@ -47,10 +47,23 @@ struct {
   // input
 #define INPUT_BUF_SIZE 128
   char buf[INPUT_BUF_SIZE];
-  uint r;  // Read index
-  uint w;  // Write index
-  uint e;  // Edit index
+  uint r;  // Read index: 用户态已经读到哪里
+  uint w;  // Write index: 内核允许用户态读到哪里
+  uint e;  // Edit index: 用户当前编辑到哪里
+  int raw; // 0 表示 xv6 原来的按行输入，1 表示逐字符输入
 } cons;
+
+// 设置控制台的输入模式
+int consmode(int raw) {
+  if (raw != 0 && raw != 1) return -1;  // 只允许设置为 0 或 1 
+  acquire(&cons.lock);
+  cons.raw = raw;
+  if (raw) {
+    cons.w = cons.e;  // 逐字符输入时，允许用户态读到编辑位置
+  }
+  release(&cons.lock);
+  return 0;
+}
 
 //
 // user write()s to the console go here.
@@ -102,7 +115,7 @@ consoleread(int user_dst, uint64 dst, int n)
 
     c = cons.buf[cons.r++ % INPUT_BUF_SIZE];
 
-    if(c == C('D')){  // end-of-file
+    if(!cons.raw && c == C('D')){  // end-of-file
       if(n < target){
         // Save ^D for next time, to make sure
         // caller gets a 0-byte result.
@@ -119,7 +132,7 @@ consoleread(int user_dst, uint64 dst, int n)
     dst++;
     --n;
 
-    if(c == '\n'){
+    if(cons.raw || c == '\n'){
       // a whole line has arrived, return to
       // the user-level read().
       break;
@@ -140,6 +153,19 @@ void
 consoleintr(int c)
 {
   acquire(&cons.lock);
+
+  // 在 raw 模式下，保留 Ctrl-P 的功能，其他字符直接允许shell读取
+  // Ctrl-P 继续由内核的 procdump() 处理
+  if(cons.raw && c != C('P')){
+    if(c != 0 && cons.e - cons.r < INPUT_BUF_SIZE){
+      c = (c == '\r') ? '\n' : c;
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
+      cons.w = cons.e;
+      wakeup(&cons.r);
+    }
+    release(&cons.lock);
+    return;
+  }
 
   switch(c){
   case C('P'):  // Print process list.
@@ -164,15 +190,15 @@ consoleintr(int c)
       c = (c == '\r') ? '\n' : c;
 
       // echo back to the user.
-      consputc(c);
+      consputc(c);   // 显示到屏幕
 
       // store for consumption by consoleread().
-      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = c;  // 存入内核缓冲区
 
       if(c == '\n' || c == C('D') || cons.e-cons.r == INPUT_BUF_SIZE){
         // wake up consoleread() if a whole line (or end-of-file)
         // has arrived.
-        cons.w = cons.e;
+        cons.w = cons.e;  // 允许用户态读到编辑位置
         wakeup(&cons.r);
       }
     }
