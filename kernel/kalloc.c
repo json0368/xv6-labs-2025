@@ -9,6 +9,8 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define NSUPER 32   // 预留 32 个 2MB 大小的内存分配给超级页
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -21,13 +23,18 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem, supermem;
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  initlock(&supermem.lock, "supermem");
+  // freerange(end, (void*)PHYSTOP);
+
+  freerange(end, (void*)(PHYSTOP - NSUPER * SUPERPGSIZE));
+  for (char *p = (char*)(PHYSTOP - NSUPER * SUPERPGSIZE); p < (char*)PHYSTOP; p += SUPERPGSIZE)
+    superfree(p);
 }
 
 void
@@ -79,4 +86,30 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void *superalloc(void) {
+  struct run *r;
+  
+  acquire(&supermem.lock);
+  r = supermem.freelist;
+  if(r)
+    supermem.freelist = r->next;
+  release(&supermem.lock);
+
+  if(r)
+    memset((char*)r, 5, SUPERPGSIZE);
+  return (void*)r;
+}
+
+void superfree(void *pa) {
+  struct run *r;
+  if (((uint64)pa % SUPERPGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("superfree");
+  memset(pa, 1, SUPERPGSIZE);
+  r = (struct run*)pa;
+  acquire(&supermem.lock);
+  r->next = supermem.freelist;
+  supermem.freelist = r;
+  release(&supermem.lock);
 }
