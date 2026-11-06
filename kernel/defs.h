@@ -192,6 +192,8 @@ void            vmprint(pagetable_t);
 #endif
 #ifdef LAB_PGTBL
 pte_t*          pgpte(pagetable_t, uint64);
+int dirtypages(pagetable_t pagetable, uint64 va0, uint64 va1,
+                uint64 *vabuf, int max, int clear);
 #endif
 
 // plic.c

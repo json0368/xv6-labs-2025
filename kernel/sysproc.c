@@ -118,6 +118,35 @@ sys_kpgtbl(void)
 }
 #endif
 
+#ifdef LAB_PGTBL
+
+#define MAX_DIRTY_PAGES 64
+
+uint64
+sys_dirty(void)
+{
+  uint64 buf, va0, va1;
+  int clear;
+  struct proc *p = myproc();
+  uint64 dirtyva[MAX_DIRTY_PAGES];  // 存储脏页虚拟地址的数组
+
+  argaddr(0, &buf);   // 缓冲区地址
+  argaddr(1, &va0);   // 起始虚拟地址
+  argaddr(2, &va1);   // 结束虚拟地址
+  argint(3, &clear);  // 是否清除脏页标记
+
+  if(va0 >= va1 || va1 > p->sz || va1 - va0 > MAX_DIRTY_PAGES * PGSIZE)
+    return -1;
+
+  int n = dirtypages(p->pagetable, va0, va1, dirtyva,
+                     MAX_DIRTY_PAGES, clear != 0);
+  // 将脏页虚拟地址数组复制到用户空间
+  if(copyout(p->pagetable, buf, (char *)dirtyva, n * sizeof(dirtyva[0])) < 0)
+    return -1;
+  return n;
+}
+#endif
+
 
 uint64
 sys_kill(void)

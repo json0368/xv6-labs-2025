@@ -231,6 +231,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   if(size == 0)
     panic("mappages: size");
 
+  // 如果 size 为超级页大小，则使用 superwalk 找到页表项
   if (size == SUPERPGSIZE) {
     if (va % SUPERPGSIZE != 0)
       panic("mappages: super va not aligned");
@@ -312,7 +313,8 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     int level = walklevel(pagetable, a);
     if (level == -1) continue;
     if (level == 1) {
-      uint64 s = SUPERPGROUNDUP(a);
+      // 当前页是超级页
+      uint64 s = SUPERPGROUNDUP(a); // 获取超级页的起始地址
       if (a == s && s + SUPERPGSIZE <= end) {
         // 整个超级页都需要删除，直接 free
         pte = walk(pagetable, a, 0);
@@ -325,9 +327,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       // 只删除超级页的一部分，需要降级成普通页
       if (demote(pagetable, a) < 0)
         panic("uvmunmap: demote failed");
-      level = 0;
     }
     
+    // 删除普通页的映射
     pte = walk(pagetable, a, 0);
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
@@ -336,8 +338,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      if (level == 1) superfree((void*)pa);
-      else kfree((void*)pa);
+      kfree((void*)pa);
     }
     *pte = 0;
   }
@@ -423,9 +424,10 @@ freewalk(pagetable_t pagetable)
 
 // Free user memory pages,
 // then free page-table pages.
-void
+void  // 释放用户内存页，然后释放页表页
 uvmfree(pagetable_t pagetable, uint64 sz)
 {
+  // 这里用 SUPERPGROUNDUP(sz) 是为了确保释放所有可能的超级页
   if(sz > 0)
     uvmunmap(pagetable, 0, SUPERPGROUNDUP(sz)/PGSIZE, 1);
   // 递归释放页表页，并且遇到叶子会 panic，叶子应该由 uvmunmap 释放
@@ -448,7 +450,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   int szinc = PGSIZE;
 
   for(i = 0; i < sz; i += szinc){
-    int level = walklevel(old, i);
+    int level = walklevel(old, i);  // 确定是否是超级页
     if (level == -1) continue;
     pte = walk(old, i, 0);
     if((*pte & PTE_V) == 0) {
@@ -614,8 +616,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   uint64 mem;
   struct proc *p = myproc();
   
-
-  if (va >= p->sz)
+  if (va >= p->sz || va < PGSIZE)   // 低于用户代码段起点的地址永远不按需分配
     return 0;
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
@@ -650,5 +651,35 @@ ismapped(pagetable_t pagetable, uint64 va) {
 pte_t*
 pgpte(pagetable_t pagetable, uint64 va) {
   return walk(pagetable, va, 0);
+}
+
+// 返回指定虚拟地址范围内的脏页数量，并将其虚拟地址存入 vabuf 中，如果 clear 为 1，则清除脏位
+int dirtypages(pagetable_t pagetable, uint64 va0, uint64 va1,
+           uint64 *vabuf, int max, int clear) {
+  int n = 0;
+  uint64 a = PGROUNDDOWN(va0);  // 对齐到页边界
+
+  for(; a < va1; a += PGSIZE){
+    pte_t *pte = walk(pagetable, a, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+      continue;
+    if(!PTE_LEAF(*pte) || (*pte & PTE_D) == 0)
+      continue;
+
+    // 如果是超级页，则将地址对齐到超级页边界
+    int is_super = walklevel(pagetable, a) == 1;
+    if(n < max)   // 将虚拟地址存入 vabuf 中
+      vabuf[n++] = is_super ? SUPERPGROUNDDOWN(a) : a;
+    if(clear)
+      *pte &= ~PTE_D;
+
+    if(is_super)
+      a = SUPERPGROUNDDOWN(a) + SUPERPGSIZE - PGSIZE;
+  }
+
+  // 刷新 TLB
+  if(clear)
+    sfence_vma();
+  return n;
 }
 #endif

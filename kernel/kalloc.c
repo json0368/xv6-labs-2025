@@ -9,7 +9,7 @@
 #include "riscv.h"
 #include "defs.h"
 
-#define NSUPER 32   // 预留 32 个 2MB 大小的内存分配给超级页
+#define NSUPER 50   // 预留 50 个 2MB 大小的内存分配给超级页
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -22,17 +22,17 @@ struct run {
 
 struct {
   struct spinlock lock;
-  struct run *freelist;
-} kmem, supermem;
+  struct run *freelist;   // 链表，用于存储空闲的页
+} kmem, supermem;   // kmem 用于普通页，supermem 用于超级页
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
   initlock(&supermem.lock, "supermem");
-  // freerange(end, (void*)PHYSTOP);
-
+  // 分配超级页的内存范围
   freerange(end, (void*)(PHYSTOP - NSUPER * SUPERPGSIZE));
+  // 分配普通页的内存范围
   for (char *p = (char*)(PHYSTOP - NSUPER * SUPERPGSIZE); p < (char*)PHYSTOP; p += SUPERPGSIZE)
     superfree(p);
 }
