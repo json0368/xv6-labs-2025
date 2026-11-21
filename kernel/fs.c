@@ -405,9 +405,10 @@ ireclaim(int dev)
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
-  struct buf *bp;
+  uint addr, *a, *b;
+  struct buf *bp, *bpp;
 
+  // 文件的前 NDIRECT 个块存入直接块中
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0){
       addr = balloc(ip->dev);
@@ -419,8 +420,10 @@ bmap(struct inode *ip, uint bn)
   }
   bn -= NDIRECT;
 
+  // 如果文件的块数超过了直接块的数量，则使用一级间接块
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
+    // 间接块为空则创建间接块
     if((addr = ip->addrs[NDIRECT]) == 0){
       addr = balloc(ip->dev);
       if(addr == 0)
@@ -439,7 +442,46 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
 
+  // 超过一级间接块的数量，就是用二级间接块
+  if(bn < NDINDIRECT){
+    uint bn1 = bn / NINDIRECT;
+    uint bn2 = bn % NINDIRECT;
+    if((addr = ip->addrs[NDIRECT + 1]) == 0){
+      addr = balloc(ip->dev);
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT + 1] = addr;
+    }
+    // 一级索引
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn1]) == 0){
+      addr = balloc(ip->dev);
+      if (addr == 0){
+        brelse(bp);
+        return 0;
+      }
+      a[bn1] = addr;
+      log_write(bp);
+    }
+    // 二级索引
+    bpp = bread(ip->dev, addr);
+    b = (uint*)bpp->data;
+    if ((addr = b[bn2]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        b[bn2] = addr;
+        log_write(bpp);
+      }
+    }
+    brelse(bpp);
+    brelse(bp);
+    return addr;
+  }
+
+  // 间接块也存放不下就 panic
   panic("bmap: out of range");
 }
 
@@ -448,17 +490,18 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
-  struct buf *bp;
-  uint *a;
+  int i, j, k;
+  struct buf *bp, *bpp;
+  uint *a, *b;
 
+  // 回收直接块
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
       ip->addrs[i] = 0;
     }
   }
-
+  // 回收一级间接块
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -469,6 +512,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+  // 回收二级间接块
+  if(ip->addrs[NDIRECT + 1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){
+        bpp = bread(ip->dev, a[j]);
+        b = (uint*)bpp->data;
+        for(k = 0; k < NINDIRECT; k++){
+          if(b[k])
+            bfree(ip->dev, b[k]);
+        }
+        brelse(bpp);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;

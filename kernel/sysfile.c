@@ -310,25 +310,51 @@ sys_open(void)
   struct inode *ip;
   int n;
 
-  argint(1, &omode);
-  if((n = argstr(0, path, MAXPATH)) < 0)
+  argint(1, &omode);  // 获取打开模式
+  if((n = argstr(0, path, MAXPATH)) < 0)  // 获取路径
     return -1;
 
   begin_op();
 
   if(omode & O_CREATE){
+    // 创建文件
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
   } else {
+    // 只打开文件
     if((ip = namei(path)) == 0){
       end_op();
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+
+    int cnt = 0; // 避免无限循环的计数器
+    while (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+      if (++cnt > 10) { // 防止符号链接循环
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      int len = readi(ip, 0, (uint64)path, 0, MAXPATH - 1);
+      if (len <= 0) {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      path[len] = '\0'; // 确保字符串以 null 结尾
+      iunlockput(ip); // 解锁并释放当前符号链接的 inode
+      if ((ip = namei(path)) == 0) { // 获取符号链接指向的 inode
+        end_op();
+        return -1;
+      }
+      ilock(ip); // 锁定新的 inode
+    }
+
+    if(ip->type == T_DIR && (omode & ~O_NOFOLLOW) != O_RDONLY){
+      // 目录只能以只读方式打开
       iunlockput(ip);
       end_op();
       return -1;
@@ -336,12 +362,14 @@ sys_open(void)
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
+    // 设备号无效
     iunlockput(ip);
     end_op();
     return -1;
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+    // 分配文件结构或文件描述符失败
     if(f)
       fileclose(f);
     iunlockput(ip);
@@ -350,9 +378,11 @@ sys_open(void)
   }
 
   if(ip->type == T_DEVICE){
+    // 设备文件
     f->type = FD_DEVICE;
     f->major = ip->major;
   } else {
+    // 普通文件或目录
     f->type = FD_INODE;
     f->off = 0;
   }
@@ -501,5 +531,27 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 sys_symlink(void) {
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  begin_op();
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0 || (ip = create(path, T_SYMLINK, 0, 0)) == 0){
+    end_op();
+    return -1;
+  }
+
+  uint n = strlen(target) + 1;    // '\0' 也要写进去
+  if(writei(ip, 0, (uint64)target, 0, n) != n) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
   return 0;
 }
