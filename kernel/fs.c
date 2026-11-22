@@ -405,8 +405,8 @@ ireclaim(int dev)
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a, *b;
-  struct buf *bp, *bpp;
+  uint addr, *a, *b, *c;
+  struct buf *bp, *bpp, *bppp;
 
   // 文件的前 NDIRECT 个块存入直接块中
   if(bn < NDIRECT){
@@ -480,6 +480,60 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NDINDIRECT;
+
+  // 超过二级间接块的数量，就是用三级间接块
+  if(bn < NTINDIRECT){
+    uint bn1 = bn / NDINDIRECT;
+    uint bn2 = (bn % NDINDIRECT) / NINDIRECT;
+    uint bn3 = bn % NINDIRECT;
+    if((addr = ip->addrs[NDIRECT + 2]) == 0){
+      addr = balloc(ip->dev);
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT + 2] = addr;
+    }
+    // 一级索引
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn1]) == 0){
+      addr = balloc(ip->dev);
+      if (addr == 0){
+        brelse(bp);
+        return 0;
+      }
+      a[bn1] = addr;
+      log_write(bp);
+    }
+    // 二级索引
+    bpp = bread(ip->dev, addr);
+    b = (uint*)bpp->data;
+    if ((addr = b[bn2]) == 0){
+      addr = balloc(ip->dev);
+      if(addr == 0){
+        brelse(bpp);
+        brelse(bp);
+        return 0;
+      }
+      b[bn2] = addr;
+      log_write(bpp);
+    }
+
+    // 三级索引
+    bppp = bread(ip->dev, addr);
+    c = (uint*)bppp->data;
+    if ((addr = c[bn3]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        c[bn3] = addr;
+        log_write(bppp);
+      }
+    }
+    brelse(bppp);
+    brelse(bpp);
+    brelse(bp);
+    return addr;
+  }
 
   // 间接块也存放不下就 panic
   panic("bmap: out of range");
@@ -490,9 +544,9 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j, k;
-  struct buf *bp, *bpp;
-  uint *a, *b;
+  int i, j, k, l;
+  struct buf *bp, *bpp, *bppp;
+  uint *a, *b, *c;
 
   // 回收直接块
   for(i = 0; i < NDIRECT; i++){
@@ -533,7 +587,35 @@ itrunc(struct inode *ip)
     bfree(ip->dev, ip->addrs[NDIRECT + 1]);
     ip->addrs[NDIRECT + 1] = 0;
   }
-
+  // 回收三级间接块
+  if(ip->addrs[NDIRECT + 2]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 2]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){
+        bpp = bread(ip->dev, a[j]);
+        b = (uint*)bpp->data;
+        for(k = 0; k < NINDIRECT; k++){
+          if(b[k]){
+            bppp = bread(ip->dev, b[k]);
+            c = (uint*)bppp->data;
+            for(l = 0; l < NINDIRECT; l++){
+              if(c[l]){
+                bfree(ip->dev, c[l]);
+              }
+            }
+            brelse(bppp);
+            bfree(ip->dev, b[k]);
+          }
+        }
+        brelse(bpp);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 2]);
+    ip->addrs[NDIRECT + 2] = 0;
+  }
   ip->size = 0;
   iupdate(ip);
 }
